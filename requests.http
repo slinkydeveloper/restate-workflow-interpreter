@@ -1,0 +1,114 @@
+### Restate Workflow Interpreter — demo requests (IntelliJ HTTP Client)
+### Base URL = the ingress of a locally running restate-server.
+@host = http://localhost:8080
+
+### 1) Define the "demo" workflow (store its JSON representation).
+### Expressions (branch `condition`, llm `prompt`, parallel `items`) are jq programs
+### over { results, input, item, index }.
+POST {{host}}/WorkflowDefinition/demo/set
+Content-Type: application/json
+
+{
+  "name": "demo",
+  "steps": [
+    { "id": "todo", "type": "http", "method": "GET", "url": "https://jsonplaceholder.typicode.com/todos/1" },
+    { "id": "wait", "type": "sleep", "durationMillis": 1000 },
+    { "id": "route", "type": "branch", "branches": [
+      { "condition": ".results.todo.body.completed == true", "steps": [ { "id": "quick", "type": "sleep", "durationMillis": 500 } ] }
+    ], "default": [ { "id": "review", "type": "sleep", "durationMillis": 1500 } ] },
+    { "id": "analysis", "type": "llm", "model": "gpt-4o-mini",
+      "prompt": "\"Classify this TODO and suggest three tags. Title: \" + .results.todo.body.title",
+      "schema": { "type": "object", "properties": {
+        "sentiment": { "type": "string", "enum": ["positive", "neutral", "negative"] },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }, "required": ["sentiment", "tags"], "additionalProperties": false } },
+    { "id": "fanout", "type": "parallel", "items": "[.results.todo.body.userId, .results.todo.body.id]", "body": [
+      { "id": "post", "type": "http", "method": "GET", "url": "https://jsonplaceholder.typicode.com/posts/1" }
+    ] }
+  ]
+}
+
+### 2) Read the stored definition back
+POST {{host}}/WorkflowDefinition/demo/get
+Accept: application/json
+
+### 3) Start it now — the request body is the starting `input`. Returns { "invocationId": "..." }
+POST {{host}}/WorkflowDefinition/demo/start
+Content-Type: application/json
+
+{ "greeting": "Hello" }
+
+> {%
+    client.global.set("invocationId", response.body.invocationId);
+    client.log("started invocation " + response.body.invocationId);
+%}
+
+### 4) Poll the invocation's status by id
+GET {{host}}/restate/invocation/{{invocationId}}/status
+Accept: application/json
+
+### 5) Attach to the invocation — blocks until it completes, returns the workflow result
+GET {{host}}/restate/invocation/{{invocationId}}/attach
+Accept: application/json
+
+### 5b) Stream progress: long-poll the per-step event log. Repeat this request with
+### the returned `nextIndex` as `afterIndex` to keep streaming until $workflow completes.
+POST {{host}}/WorkflowEvents/{{invocationId}}/watch
+Content-Type: application/json
+
+{ "afterIndex": 0, "timeoutSeconds": 30 }
+
+### 5c) Or read the whole progress log at once
+POST {{host}}/WorkflowEvents/{{invocationId}}/list
+Accept: application/json
+
+### 6) Schedule it to run 10 seconds in the future, with its own input
+POST {{host}}/WorkflowDefinition/demo/schedule
+Content-Type: application/json
+
+{ "delayMillis": 10000, "input": { "greeting": "Later" } }
+
+> {% client.global.set("scheduledId", response.body.invocationId); %}
+
+### 7) Poll the scheduled invocation (PENDING until the delay elapses, then runs)
+GET {{host}}/restate/invocation/{{scheduledId}}/status
+Accept: application/json
+
+### 8) List every invocation id started from this definition
+POST {{host}}/WorkflowDefinition/demo/invocations
+Accept: application/json
+
+###############################################################################
+# LLM demo: "blog-ideas" — an LLM-driven pipeline. Needs OPENAI_API_KEY set on
+# the running service (export it or put it in a .env file).
+###############################################################################
+
+### 9) Define the "blog-ideas" workflow
+POST {{host}}/WorkflowDefinition/blog-ideas/set
+Content-Type: application/json
+
+{
+  "name": "blog-ideas",
+  "steps": [
+    { "id": "ideas", "type": "llm", "model": "gpt-4o-mini", "system": "You are a punchy content strategist.",
+      "prompt": "\"Give me 3 blog post ideas about: \" + .input.topic",
+      "schema": { "type": "object", "properties": { "ideas": { "type": "array", "items": { "type": "string" } } }, "required": ["ideas"], "additionalProperties": false } },
+    { "id": "drafts", "type": "parallel", "items": ".results.ideas.ideas[]", "body": [
+      { "id": "draft", "type": "llm", "model": "gpt-4o-mini",
+        "prompt": "\"Blog idea: \" + .item + \". Topic: \" + .input.topic + \". Write a catchy title, a 3-bullet outline, and a tweet.\"",
+        "schema": { "type": "object", "properties": { "title": { "type": "string" }, "outline": { "type": "array", "items": { "type": "string" } }, "tweet": { "type": "string" } }, "required": ["title", "outline", "tweet"], "additionalProperties": false } }
+    ] }
+  ]
+}
+
+### 10) Start it with a topic (the request body is the input). Returns { invocationId }
+POST {{host}}/WorkflowDefinition/blog-ideas/start
+Content-Type: application/json
+
+{ "topic": "durable execution" }
+
+> {% client.global.set("llmInvocationId", response.body.invocationId); %}
+
+### 11) Attach for the result — several LLM calls, so give it a few seconds
+GET {{host}}/restate/invocation/{{llmInvocationId}}/attach
+Accept: application/json

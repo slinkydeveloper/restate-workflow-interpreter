@@ -1,0 +1,50 @@
+{
+  "name": "demo",
+  "steps": [
+    {
+      "id": "todo",
+      "type": "http",
+      "method": "GET",
+      "url": "https://jsonplaceholder.typicode.com/todos/1"
+    },
+    {
+      "id": "wait",
+      "type": "sleep",
+      "durationMillis": 1000
+    },
+    {
+      "id": "route",
+      "type": "branch",
+      "branches": [
+        {
+          "condition": ".results.todo.body.completed == true",
+          "steps": [ { "id": "quick", "type": "sleep", "durationMillis": 500 } ]
+        }
+      ],
+      "default": [ { "id": "review", "type": "sleep", "durationMillis": 1500 } ]
+    },
+    {
+      "id": "analysis",
+      "type": "llm",
+      "model": "gpt-4o-mini",
+      "prompt": "\"Classify this TODO and suggest three tags. Title: \" + .results.todo.body.title",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "sentiment": { "type": "string", "enum": ["positive", "neutral", "negative"] },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["sentiment", "tags"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "fanout",
+      "type": "parallel",
+      "items": "[.results.todo.body.userId, .results.todo.body.id]",
+      "body": [
+        { "id": "post", "type": "http", "method": "GET", "url": "https://jsonplaceholder.typicode.com/posts/1" }
+      ]
+    }
+  ]
+}

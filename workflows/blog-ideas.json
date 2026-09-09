@@ -1,0 +1,43 @@
+{
+  "name": "blog-ideas",
+  "steps": [
+    {
+      "id": "ideas",
+      "type": "llm",
+      "model": "gpt-4o-mini",
+      "system": "You are a punchy content strategist.",
+      "prompt": "\"Give me 3 blog post ideas about: \" + .input.topic",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "ideas": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["ideas"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "drafts",
+      "type": "parallel",
+      "items": ".results.ideas.ideas[]",
+      "body": [
+        {
+          "id": "draft",
+          "type": "llm",
+          "model": "gpt-4o-mini",
+          "prompt": "\"Blog idea: \" + .item + \". Topic: \" + .input.topic + \". Write a catchy title, a 3-bullet outline, and a tweet.\"",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string" },
+              "outline": { "type": "array", "items": { "type": "string" } },
+              "tweet": { "type": "string" }
+            },
+            "required": ["title", "outline", "tweet"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  ]
+}
